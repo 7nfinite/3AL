@@ -751,29 +751,26 @@ async function passerCommande() {
     const articles = panier.map(i=>({produitId:i.id,nom:i.nom,emoji:i.emoji,photoURL:i.photoURL||'',prix:i.prix,qte:i.qte}));
     const total = panier.reduce((s,i)=>s+i.prix*i.qte,0);
     await db.collection('commandes').add({
-      clientId: currentUser.uid,
-      clientNom: cli.nom||currentUser.displayName||'Client',
+      clientId:    currentUser.uid,
+      clientNom:   cli.nom||currentUser.displayName||'Client',
       clientEmail: currentUser.email,
-      telephone: cli.telephone||'',   // FIX 1 : téléphone inclus
+      telephone:   cli.telephone||'',
       articles, total,
-      statut:'confirmee',
-      etapes:{ confirmee:firebase.firestore.FieldValue.serverTimestamp(),
-               preparation:null, livraison:null, livre:null },
+      statut: 'confirmee',
+      etapes: {
+        confirmee:   firebase.firestore.FieldValue.serverTimestamp(),
+        preparation: null, livraison: null, livre: null
+      },
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
-    // décrémenter stock
-    const batch = db.batch();
-    panier.forEach(it=>{
-      const pr = allProduits.find(p=>p.id===it.id);
-      if(pr&&pr.stock!==undefined)
-        batch.update(db.collection('produits').doc(it.id),
-          {stock:firebase.firestore.FieldValue.increment(-it.qte)});
-    });
-    await batch.commit();
+    // La décrémentation du stock est faite par l'admin (règle write admin seulement)
     panier=[]; savePanier();
     toast('Commande passée ! 🎉');
     goTo('commandes');
-  } catch(e) { toast('Erreur : '+e.message); }
+  } catch(e) {
+    console.error('Commande erreur:', e);
+    toast('Erreur ('+( e.code||'inconnu')+'): '+e.message);
+  }
 }
 
 // FIX 2 : on recrée le listener à chaque visite — pas de garde bloquante
@@ -783,13 +780,15 @@ function startCommandes() {
   document.getElementById('cmd-list').innerHTML='';
   document.getElementById('cmd-empty').style.display='none';
 
-  const q = db.collection('commandes')
-    .where('clientId','==',currentUser.uid)
-    .orderBy('createdAt','desc');
+  // Filtre JS = aucun index Firestore requis
+  const q = db.collection('commandes');
 
   unsubCmd = q.onSnapshot(snap=>{
     document.getElementById('cmd-loader').style.display='none';
-    const cmds = snap.docs.map(d=>({id:d.id,...d.data()}));
+    // filtre Firestore
+    const cmds = snap.docs.map(d=>({id:d.id,...d.data()}))
+      .filter(c=>c.clientId===currentUser.uid)
+      .sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
     const pending = cmds.filter(c=>c.statut==='confirmee'||c.statut==='preparation').length;
     const nd = document.getElementById('notif-dot');
     nd.style.display = pending>0?'flex':'none'; nd.textContent=pending;
@@ -831,6 +830,10 @@ function startCommandes() {
         <div class="steps">${stepsHTML}</div>
       </div>`;
     }).join('');
+  }, err=>{
+    document.getElementById('cmd-loader').style.display='none';
+    document.getElementById('cmd-list').innerHTML=
+      `<div class="error-box"><i class="ti ti-alert-circle"></i>Impossible de charger : ${err.code||err.message}</div>`;
   });
 }
 
